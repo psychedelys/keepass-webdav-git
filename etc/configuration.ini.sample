@@ -1,0 +1,13 @@
+[webdavgit]
+# Where the file is stored on the disk.
+mediaroot = /opt/store/.../keepass/blahblah/
+port = 8250
+debug = True
+# if the webserver is outside, put the Reverse-Proxy URL
+# http://www.exemple.org/blahblah/mykeepass.kdbx
+root_url = blahblah
+# real hostname from outside, put the Reverse-Proxy hostname
+# http://exemple.org/blahblah/mykeepass.kdbx
+realhost = www.exemple.org
+# Default git committer, if not authorization header is found.
+committer = username <username@exemple.com>
