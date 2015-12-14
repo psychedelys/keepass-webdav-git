@@ -21,12 +21,11 @@ import urllib
 import re
 import logging
 import base64
+import ldap3
 
 from dulwich.repo import Repo
 
-
-app = Flask(__name__)
-logging.basicConfig(level=logging.DEBUG)
+pp = pprint.PrettyPrinter(indent=4)
 runPath = os.path.dirname(os.path.realpath(__file__))
 cfg_file = runPath + '/../etc/configuration.ini'
 
@@ -40,7 +39,8 @@ def read_config():
         error("can't read configuration file %s. %s." % (cfg_file, str(e)))
 
     # Check if all keys are in the file
-    keys = ['MediaRoot', 'Port', 'Debug', 'Root_URL', 'realhost', 'Committer']
+    keys = ['MediaRoot', 'Port', 'Debug', 'Root_URL', 'realhost', 'Committer',
+            'ldap_server', 'ldap_port', 'ldap_basedn', 'ldap_search', 'ldap_realm']
     for key in keys:
         if key not in config['webdavgit']:
             error("config file %s incomplete, please check!" % (cfg_file))
@@ -52,7 +52,6 @@ def end(code, message):
     abort(code, message)
 
 
-pp = pprint.PrettyPrinter(indent=4)
 config = read_config()
 
 allowed_extention = ['.kdbx', '.kdbx.tmp']
@@ -60,6 +59,76 @@ root_url = config['Root_URL']
 Debug = config['Debug']
 realhost = config['realhost']
 basepath = os.path.join(config['MediaRoot'])
+
+app = Flask(__name__)
+logging.basicConfig(level=logging.DEBUG)
+
+app.config['LDAP_SERVER'] = config['ldap_server']
+app.config['LDAP_PORT'] = int(config['ldap_port'])
+app.config['LDAP_PROTOCOL_VERSION'] = 3
+app.config['LDAP_BASE_DN'] = config['ldap_basedn']
+app.config['LDAP_BASE_SEARCH'] = config.get('ldap_search', raw=True)
+# Max must be the same as the nginx parameter client_max_body_size
+# if nginx is used in front
+app.config['MAX_CONTENT_LENGTH'] = 3 * 1024 * 1024
+app.config['LDAP_SERVER_CONN'] = ldap3.Server(app.config['LDAP_SERVER'], port=app.config['LDAP_PORT'], use_ssl=False, get_info='NO_INFO')
+
+
+def check_auth(username, password):
+    """This function is called to check if a username /
+    password combination is valid.
+    """
+    retval = None
+    Flag = False
+    try:
+        conn = ldap3.Connection(app.config['LDAP_SERVER_CONN'], 'mail=%s,%s' % (username, app.config['LDAP_BASE_DN']), password, auto_bind=False)
+        conn.bind()
+        if not conn:
+            return False
+        # Add the LDAP search
+        if conn.search(
+                search_base = app.config['LDAP_BASE_DN'],
+                search_filter = app.config['LDAP_BASE_SEARCH'].format(username=username),
+                ):
+            debug("ldap: %s" % (pp.pformat(conn.response[0])))
+            Flag = True
+        else:
+            debug("ldap: no response found: %s" % (app.config['LDAP_BASE_SEARCH'].format(username=username)))
+        conn.unbind()
+        return Flag
+    except Exception as e:
+        debug("ldap: Exception:%s" % (str(e)))
+        return False
+
+
+def authenticate():
+    """Sends a 401 response that enables basic auth"""
+    return Response(
+        'Could not verify your access level for that URL.\n'
+        'You have to login with proper credentials', 401,
+        {'WWW-Authenticate': 'Basic realm="%s"' % (config['ldap_realm'])})
+
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.headers.get('Authorization', None)
+        if not auth:
+            return authenticate()
+
+        token = request.headers.get('Authorization')
+        if token:
+            token = token.replace('Basic ', '', 1)
+            try:
+                (api_username, api_password) = base64.b64decode(token).decode('utf-8').split(':', 1)
+                api_username = urllib.parse.unquote(api_username, encoding='utf-8')
+            except TypeError:
+                return authenticate()
+
+        if not check_auth(api_username, api_password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
 
 
 def __withException(func):
@@ -76,13 +145,9 @@ def __withException(func):
     return wrapper
 
 
-# Max must be the same as the nginx parameter client_max_body_size
-# if nginx is used in front
-app.config['MAX_CONTENT_LENGTH'] = 3 * 1024 * 1024
-
-
 @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
 @app.route('/<path:path>', methods=['OPTIONS'])
+@requires_auth
 def options(path):
     response = make_response()
     response.headers['Allow'] =\
@@ -93,6 +158,7 @@ def options(path):
 
 @app.route('/', defaults={'path': ''}, methods=['MOVE'])
 @app.route('/<path:path>', methods=['MOVE'])
+@requires_auth
 @__withException
 def move(path):
     debug("MOVE with path '%s'" % (path))
@@ -210,6 +276,7 @@ def move(path):
 
 @app.route('/', defaults={'path': ''}, methods=['GET'])
 @app.route('/<path:path>', methods=['GET'])
+@requires_auth
 @__withException
 def get(path):
     # remove anypath inside the filename to insure against injection.
@@ -264,6 +331,7 @@ def get(path):
 
 @app.route('/', defaults={'path': ''}, methods=['PUT'])
 @app.route('/<path:path>', methods=['PUT'])
+@requires_auth
 @__withException
 def put(path):
     debug("PUT with path '%s'" % (path))
@@ -340,6 +408,7 @@ def put(path):
 
 @app.route('/', defaults={'path': ''}, methods=['DELETE'])
 @app.route('/<path:path>', methods=['DELETE'])
+@requires_auth
 @__withException
 def delete(path):
     debug("DELETE with path '%s'" % (path))

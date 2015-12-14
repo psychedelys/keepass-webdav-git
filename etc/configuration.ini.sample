@@ -10,4 +10,15 @@ root_url = blahblah
 # http://exemple.org/blahblah/mykeepass.kdbx
 realhost = www.exemple.org
 # Default git committer, if not authorization header is found.
-committer = username <username@exemple.com>
+committer = username <username@exemple.org>
+# LDAP server
+ldap_server = ldap.exemple.org
+# LDAP port
+ldap_port = 389
+# LDAP Base DN
+ldap_basedn = ou=Users,domainName=exemple.org,o=domains,dc=exemple,dc=org
+# LDAP Search, '{username}' is the pattern needed for replacement, using python interpolation!
+ldap_search = (&(mail={username})(enabledService=keepass))
+# LDAP REALM 
+ldap_realm = Somtehing
+
